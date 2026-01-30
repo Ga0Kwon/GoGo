@@ -1,4 +1,4 @@
-import { use, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { sendGAEvent } from "../../js/utils/ga.js";
 
 export default function KakaoMap({ lat, lng, level = 4, markers = []}) {
@@ -8,50 +8,10 @@ export default function KakaoMap({ lat, lng, level = 4, markers = []}) {
   const isAutoCenterRef = useRef(true);
   const markersRef = useRef([]); // 마커들을 저장할 배열
 
-  // 1️⃣ 지도 생성 (한 번만)
-  useEffect(() => {
-    if (!containerRef.current || !window.kakao?.maps) return;
+  // 1️⃣ 지도 생성 (한 번만) — SDK가 늦게 로드되는 경우(kakao-sdk-loaded 이벤트)에도 초기화합니다.
+  const pendingCenterRef = useRef(null);
 
-    mapRef.current = new window.kakao.maps.Map(
-      containerRef.current,
-      {
-        center: new window.kakao.maps.LatLng(lat, lng),
-        level,
-      }
-    );
-
-    window.kakao.maps.event.addListener(
-      mapRef.current,
-      "dragstart",
-      () => {
-        isAutoCenterRef.current = false;
-      }
-    );
-  }, []);
-
-  // 2️⃣ 현재 위치 마커 + 중앙 이동
-  useEffect(() => {
-    if (!mapRef.current || !window.kakao?.maps) return;
-
-    const position = new window.kakao.maps.LatLng(lat, lng);
-
-    // 🔹 현재 위치 마커
-    if (!currentMarkerRef.current) {
-      currentMarkerRef.current = new window.kakao.maps.Marker({
-        position,
-      });
-      currentMarkerRef.current.setMap(mapRef.current);
-    } else {
-      currentMarkerRef.current.setPosition(position);
-    }
-
-    // 🔹 자동 중앙 포커스
-    if (isAutoCenterRef.current) {
-      mapRef.current.setCenter(position);
-    }
-  }, [lat, lng]);
-
-  useEffect(() => {
+  const renderMarkers = () => {
     if (!mapRef.current || !window.kakao?.maps) return;
 
     // 기존 마커 제거
@@ -117,8 +77,86 @@ export default function KakaoMap({ lat, lng, level = 4, markers = []}) {
 
         marker.setMap(mapRef.current);
         markersRef.current.push(marker);
-  });
+    });
+  };
 
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const init = () => {
+      if (!window.kakao?.maps || mapRef.current) return;
+
+      mapRef.current = new window.kakao.maps.Map(
+        containerRef.current,
+        {
+          center: new window.kakao.maps.LatLng(lat, lng),
+          level,
+        }
+      );
+
+      window.kakao.maps.event.addListener(
+        mapRef.current,
+        "dragstart",
+        () => {
+          isAutoCenterRef.current = false;
+        }
+      );
+
+      // Apply pending center if user selected a place before init
+      if (pendingCenterRef.current) {
+        const p = pendingCenterRef.current;
+        mapRef.current.setCenter(new window.kakao.maps.LatLng(p[0], p[1]));
+        pendingCenterRef.current = null;
+      }
+
+      // render markers that arrived earlier
+      renderMarkers();
+    };
+
+    // 초기 시도
+    init();
+
+    // SDK 로드 완료 이벤트 수신
+    const onLoaded = () => {
+      console.info('kakao-sdk-loaded event received');
+      init();
+    };
+    window.addEventListener("kakao-sdk-loaded", onLoaded);
+    return () => window.removeEventListener("kakao-sdk-loaded", onLoaded);
+  }, []);
+
+  // 2️⃣ 현재 위치 마커 + 중앙 이동
+  useEffect(() => {
+    const position = [lat, lng];
+
+    if (!mapRef.current || !window.kakao?.maps) {
+      // Save pending center to apply when map is ready
+      pendingCenterRef.current = position;
+      return;
+    }
+
+    const pos = new window.kakao.maps.LatLng(lat, lng);
+
+    // 🔹 현재 위치 마커
+    if (!currentMarkerRef.current) {
+      currentMarkerRef.current = new window.kakao.maps.Marker({
+        position: pos,
+      });
+      currentMarkerRef.current.setMap(mapRef.current);
+    } else {
+      currentMarkerRef.current.setPosition(pos);
+    }
+
+    // 🔹 자동 중앙 포커스
+    if (isAutoCenterRef.current) {
+      mapRef.current.setCenter(pos);
+    }
+
+  }, [lat, lng]);
+
+  useEffect(() => {
+    // whenever markers prop changes, renderMarkers (if map is ready)
+    renderMarkers();
   }, [markers]);
 
   const scoreColors = {
